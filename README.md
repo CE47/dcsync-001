@@ -80,7 +80,6 @@ Work in Kibana with the guide open beside you:
   needed). It is a card deck that walks you from an empty screen to a signed-off
   verdict, with screenshots taken from this exact lab, the investigation queries to
   run, and where to find each answer.
-- The same content is in `guided-walkthrough.md` if you prefer plain text.
 - The setup script also prints the seven queries and the number of results each one
   must return — that is your reference sheet.
 
