@@ -1,0 +1,28 @@
+{
+  "name": "A single SMB session far larger than ordinary file-share traffic",
+  "description": "Lab rule for the CTIA dcsync-001 scenario. One SMB session moved more than half a megabyte. SMB is Windows file sharing and always runs on port 445, and on this estate the ordinary daily file-share sessions run between 1.6 KB and 62 KB - the largest of the twenty-six background ones is 61,736 bytes. A single session an order of magnitude above that is a bulk copy out rather than a person opening a document, and it is what turns an interesting authentication event into a reportable breach, because it is the only evidence in the dataset that data left the building. The rule is a volume test and names nothing at all: it does not claim the source is the compromised workstation, it does not claim the destination is a file server, and it does not claim the session was malicious. It only says one transfer was unusually large, and the analyst has to notice for themselves that it carries the same source address as the two authentication alerts. That join is the work, so the rule is written to make it possible and not to perform it. In production the threshold would be a percentile of each share's own history rather than a fixed byte count, and would be split by direction, because a large read out and a large write in mean very different things.",
+  "type": "query",
+  "risk_score": 73,
+  "severity": "high",
+  "tags": [
+    "ctia-lab",
+    "dcsync",
+    "exfiltration",
+    "network",
+    "collection",
+    "detection-engineering"
+  ],
+  "enabled": true,
+  "interval": "1m",
+  "from": "now-365d",
+  "to": "now",
+  "index": [
+    "network-*"
+  ],
+  "timeField": "@timestamp",
+  "query": "network.protocol: \"smb\" and network.bytes > 500000",
+  "language": "kuery",
+  "max_signals": 100,
+  "actions": [],
+  "notify_when": "onActiveAlert"
+}

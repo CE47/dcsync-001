@@ -1,0 +1,28 @@
+{
+  "name": "Scripting host started by a command shell rather than by a desktop",
+  "description": "Lab rule for the CTIA dcsync-001 scenario. A PowerShell process was created whose parent is cmd.exe. Every one of the twenty-odd other process creations in this dataset hangs off explorer.exe, because that is how a person starts a program; a scripting host whose parent is a command shell was started by something that was already running code, which is the shape of a loader rather than of a user opening a tool. The rule is a pure shape test on purpose. It names no account, no host and nothing about what the script does, so the alert tells the analyst that a hidden child of a shell exists and leaves the rest - which account ran it, when it ran relative to the directory replication, and what the command line actually says - as the work. That is deliberate: a rule that matched on the -EncodedCommand blob, or that named the account, would hand over the whole middle of the attack chain and leave no investigation to run. In production this test is normally joined to a shorter lookback, to an allow-list of management platforms that legitimately shell out to PowerShell, and to an alert on the encoding itself as a separate rule.",
+  "type": "query",
+  "risk_score": 73,
+  "severity": "high",
+  "tags": [
+    "ctia-lab",
+    "active-directory",
+    "dcsync",
+    "execution",
+    "defense-evasion",
+    "detection-engineering"
+  ],
+  "enabled": true,
+  "interval": "1m",
+  "from": "now-365d",
+  "to": "now",
+  "index": [
+    "auth-*"
+  ],
+  "timeField": "@timestamp",
+  "query": "event.code: 4688 and process.name: \"powershell.exe\" and process.parent.name: \"cmd.exe\"",
+  "language": "kuery",
+  "max_signals": 100,
+  "actions": [],
+  "notify_when": "onActiveAlert"
+}
