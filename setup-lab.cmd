@@ -24,24 +24,20 @@ rem ===========================================================================
 rem ------------------------------------------------------------------ settings
 set "ESPORT=9200"
 set "KBPORT=5601"
-set "ESIMAGE=docker.elastic.co/elasticsearch/elasticsearch:9.1.0"
-set "KBIMAGE=docker.elastic.co/kibana/kibana:9.1.0"
+set "ESIMAGE=docker.elastic.co/elasticsearch/elasticsearch:9.1.4"
+set "KBIMAGE=docker.elastic.co/kibana/kibana:9.1.4"
 
 set "IDXSUF=2026.09.22"
-set "AUTHDOCS=275"
-set "NETDOCS=145"
-set "ATTACKIP=10.0.4.10"
-set "ENTRYUSER=asmith"
-
-rem  Every count the walkthrough quotes, asserted against the live index at the
-rem  end of the run.  D4 is the one-shot query from instructions.md and the query
-rem  behind rule.json, so it is the same number the Alerts page will show.
-set "D1=49"
-set "D2=3"
-set "D3=3"
-set "D4=3"
+set "AUTHDOCS=241"
+set "DNSDOCS=179"
+set "C2DOMAIN=exfil-c2.example"
+set "C2IP=10.0.4.13"
+set "C2HOST=sec-win-05"
+set "D1=52"
+set "D2=179"
+set "D3=50"
+set "D4=50"
 set "D5=1"
-set "D6=1"
 
 rem ------------------------------------------------------------------ accounts
 rem  Security has to be on. A detection rule cannot be created against a
@@ -59,24 +55,12 @@ set "ESPASS=LabElastic001"
 set "KBUSER=lab_kibana"
 set "KBPASS=LabKibana001"
 
-rem --------------------------------------------------------------- the rules
-rem  Three rules, three different questions, three different alert counts.
-rem  A pipe-separated list would be simpler, but a rule name is prose and prose
-rem  contains spaces, so each of the three blocks below is kept in its own
-rem  variable, aligned line for line, and read across.
-set "RULEFILES=rule.json rule-2.json rule-3.json"
-set "RULEALERTS=3 1 1"
-set "RULEALERTTOT=5"
-set "NRULES=3"
-set "R1FILE=rule.json"
-set "R2FILE=rule-2.json"
-set "R3FILE=rule-3.json"
-set "R1NAME=Directory replication requested against the domain controller from a workstation"
-set "R2NAME=Scripting host started by a command shell rather than by a desktop"
-set "R3NAME=A single SMB session far larger than ordinary file-share traffic"
-set "R1ALERTS=3"
-set "R2ALERTS=1"
-set "R3ALERTS=1"
+rem  the detection rule, and the number of alerts it should end up producing.
+rem  RULEALERTS is D3 on purpose: the rule runs query 3, so the alert count and
+rem  the count the walkthrough makes the student type by hand are the same
+rem  number, and the two of them cross-check each other.
+set "RULENAME=Burst of DNS queries with long encoded subdomains to one unfamiliar domain"
+set "RULEALERTS=%D3%"
 
 rem ------------------------------------------------------ identity from folder
 for %%I in ("%~dp0.") do set "SCEN=%%~nI"
@@ -137,7 +121,6 @@ echo   Scenario lab   :  %SCEN%
 echo   Elasticsearch  :  %ESURL%
 echo   Kibana         :  %KBURL%
 echo   Scratch folder :  %WORK%
-echo   Detection rules:  %NRULES%  (rule.json, rule-2.json, rule-3.json)
 echo  ==============================================================
 echo.
 
@@ -154,7 +137,7 @@ rem  reset
 rem ===========================================================================
 :do_reset
 echo  [reset] removing whatever a previous run of this lab left behind
-if exist "%COMPOSEFILE%" call :down
+if exist "%COMPOSEFILE%" docker compose -f "%COMPOSEFILE%" down -v --remove-orphans >nul 2>&1
 docker volume rm -f "%VOL%" >nul 2>&1
 docker rm -f "%SCEN%-elasticsearch" "%SCEN%-kibana" >nul 2>&1
 echo  [reset] done.
@@ -192,7 +175,7 @@ rem     authenticate to, and it refuses to run as the elastic superuser, so
 rem     there is no order in which compose could start both and have Kibana
 rem     wait. Splitting the two is the only way this works unattended.
 echo  [1/10] starting Elasticsearch in Docker
-%DC% -f "%COMPOSEFILE%" up -d elasticsearch
+docker compose -f "%COMPOSEFILE%" up -d elasticsearch
 if errorlevel 1 (
   call :fail "docker compose up failed" "No data was changed."
   exit /b 1
@@ -236,7 +219,7 @@ echo.
 
 rem ====================================================== 4. bring up Kibana
 echo  [4/10] starting Kibana in Docker
-%DC% -f "%COMPOSEFILE%" up -d kibana
+docker compose -f "%COMPOSEFILE%" up -d kibana
 if errorlevel 1 (
   call :fail "docker compose up kibana failed" "The log data has not been touched."
   exit /b 1
@@ -268,31 +251,31 @@ rem ======================================================= 6. index templates
 echo  [6/10] installing the index templates, which is what fixes the field types
 call :puttemplate auth
 if errorlevel 1 exit /b 1
-call :puttemplate network
+call :puttemplate dns
 if errorlevel 1 exit /b 1
 echo.
 
 rem ============================================================ 7. import data
 echo  [7/10] checking the datasets
-if not exist "%LABDIR%\auth.ndjson"   (call :fail "auth.ndjson is missing from %LABDIR%"   "Nothing was changed." & exit /b 1)
-if not exist "%LABDIR%\network.ndjson" (call :fail "network.ndjson is missing from %LABDIR%" "Nothing was changed." & exit /b 1)
+if not exist "%LABDIR%\auth.ndjson" (call :fail "auth.ndjson is missing from %LABDIR%"   "Nothing was changed." & exit /b 1)
+if not exist "%LABDIR%\dns.ndjson"  (call :fail "dns.ndjson is missing from %LABDIR%"    "Nothing was changed." & exit /b 1)
 call :importone auth   %AUTHDOCS%
 if errorlevel 1 exit /b 1
-call :importone network %NETDOCS%
+call :importone dns    %DNSDOCS%
 if errorlevel 1 exit /b 1
 echo.
 
 rem ============================================================= 8. data views
 echo  [8/10] creating the Kibana data views
-call :mkdataview "%SCEN%-auth"    "auth-*"    auth
+call :mkdataview "%SCEN%-auth" "auth-*" auth %AUTHDOCS%
 if errorlevel 1 exit /b 1
-call :mkdataview "%SCEN%-network" "network-*" network
+call :mkdataview "%SCEN%-dns"  "dns-*"  dns  %DNSDOCS%
 if errorlevel 1 exit /b 1
 echo.
 
-rem ================================================ 9. the detection rules
-echo  [9/10] installing the %NRULES% detection rules, so the Alerts page has something
-call :mkrules
+rem ================================================ 9. the detection rule
+echo  [9/10] installing the detection rule, so the Alerts page has something
+call :mkrule
 if errorlevel 1 exit /b 1
 echo.
 
@@ -300,14 +283,14 @@ rem ============================================== 10. end-to-end truth verify
 call :verify
 if errorlevel 1 exit /b 1
 
-rem ================================================================== done
+rem ================================================================= 11. done
 echo  ==============================================================
 echo    The lab is ready.
 echo.
 echo    Elasticsearch : %ESURL%
 echo    Kibana        : %KBURL%
-echo    data view "auth"     index pattern auth-*   %AUTHDOCS% documents
-echo    data view "network"  index pattern network-*  %NETDOCS% documents
+echo    data view "auth"     index pattern auth-*
+echo    data view "dns"      index pattern dns-*
 echo.
 echo    The stack has security switched on, so there are two things to type.
 echo    They are lab credentials. They protect nothing.
@@ -322,35 +305,35 @@ echo.
 echo  ---------------- the investigation queries, in order ---------------
 echo.
 echo    Data view   auth-*
-echo      1   event.code: 4624
-echo      2   event.code: 4624 and source.ip: "%ATTACKIP%"
-echo      3   event.code: 4662
-echo      4   event.code: 4662 and source.ip: "%ATTACKIP%"
-echo      5   event.code: 4688 and user.name: "%ENTRYUSER%"
+echo      1   event.code: 4624 and event.outcome: "success"
 echo.
-echo    Data view   network-*
-echo      6   network.protocol: "smb" and source.ip: "%ATTACKIP%"
+echo    Data view   dns-*
+echo      2   *                          the baseline, no filter
+echo      3   dns.question.registered_domain: "%C2DOMAIN%"
+echo      4   dns.question.registered_domain: "%C2DOMAIN%" and source.ip: "%C2IP%"
+echo.
+echo    Data view   auth-*
+echo      5   event.code: 4624 and event.outcome: "success" and host.name: "%C2HOST%"
 echo.
 echo    Time range for every query
 echo      2026-09-22 00:00:00.000  to  2026-09-22 23:59:59.999   (UTC)
 echo.
-echo    The rules that fired, on  Security -^> Alerts
-echo      %RULEALERTTOT% alerts in total, from %NRULES% rules
-echo        %R1ALERTS%   %R1NAME%
-echo        %R2ALERTS%   %R2NAME%
-echo        %R3ALERTS%   %R3NAME%
-echo    The same thing by hand
-echo      event.code: 4662 and source.ip: "%ATTACKIP%"   (query 4, the same as rule 1)
+echo    The rule that fired
+echo      Security -^> Alerts                     %RULEALERTS% alerts
+echo      Security -^> Rules -^> Detection rules   see the rule itself
+echo    The same query by hand
+echo      dns.question.registered_domain: "%C2DOMAIN%"
 echo  ---------------------------------------------------------------------
 echo.
 echo    Stop the lab but keep the data
-echo      %DC% -f docker-compose.yml down
+echo      docker compose -f docker-compose.yml down
 echo.
 echo    Remove the lab completely
 echo      teardown.cmd
 echo.
 echo  ==============================================================
 echo.
+
 if "%LAUNCH%"=="1" (
   echo  Opening Kibana in your default browser...
   echo  Log in with  %KBUSER%  /  %KBPASS%
@@ -366,15 +349,6 @@ rem  S U B R O U T I N E S
 rem ===========================================================================
 
 rem ---------------------------------------------------------------- preflight
-rem  Three things are checked here rather than much later and much less
-rem  clearly: the scratch folder can be created, docker is installed AND its
-rem  engine is answering, and curl.exe exists.  A fourth check walks the two
-rem  shipped .ndjson files, because the bulk import below writes each line
-rem  through an unquoted ECHO, and a line containing a character cmd treats as
-rem  a metacharacter - or a byte outside the OEM code page - would be corrupted
-rem  in transit and Elasticsearch would reject a document for no visible
-rem  reason.  The data shipped with this lab is clean ASCII; this turns a
-rem  future dataset that is not into one clear sentence.
 :preflight
 if not exist "%WORK%" mkdir "%WORK%" >nul 2>&1
 if not exist "%WORK%" (
@@ -403,79 +377,8 @@ if not defined DVER (
   call :fail "" "Nothing was changed."
   exit /b 1
 )
-rem  Compose v2 is "docker compose"; v1 was a separate "docker-compose" binary.
-rem  Both are accepted, and DC is what the rest of the file calls, so an older
-rem  Windows host is not turned away for the sake of a preference.
-set "DC=docker compose"
-docker compose version >nul 2>&1
-if errorlevel 1 (
-  where docker-compose >nul 2>&1
-  if errorlevel 1 (
-    echo  ERROR: docker is installed but the Compose plugin is missing.
-    echo.
-    echo    This script builds the lab with a Compose file, so it needs either
-    echo    the "docker compose" plugin or the older "docker-compose" command.
-    echo.
-    call :fail "" "Nothing was changed."
-    exit /b 1
-  )
-  set "DC=docker-compose"
-)
-where curl.exe >nul 2>&1
-if errorlevel 1 (
-  echo  ERROR: "curl.exe" was not found on this computer.
-  echo.
-  echo    Every template, every document and every data view is loaded with
-  echo    curl. Windows 10 and 11 ship it; on anything older, install it or
-  echo    use the .sh twin under WSL.
-  echo.
-  call :fail "" "Nothing was changed."
-  exit /b 1
-)
-call :checkdata
-if errorlevel 1 exit /b 1
 echo  [preflight] docker engine version !DVER!
-echo  [preflight] compose command: %DC%
-echo  [preflight] curl.exe present, and both datasets are clean ASCII
 echo  [preflight] every object will be named from the folder name "%SCEN%"
-exit /b 0
-
-rem ------------------------------------------------- the shipped data, checked
-:checkdata
-for %%D in (auth network) do (
-  if not exist "%LABDIR%\%%D.ndjson" (
-    echo  ERROR: %%D.ndjson is missing from %LABDIR%
-    echo.
-    call :fail "" "Nothing was changed."
-    exit /b 1
-  )
-  rem  A byte outside 0x20..0x7E, or one of the four characters an unquoted
-  rem  ECHO would swallow ( & | < > ), makes the round trip through the import
-  rem  below lossy.  findstr's /r bracket expression is tested against a line of
-  rem  known-clean text first, so a findstr that cannot do the job at all is
-  rem  reported rather than silently passing everything.
-  set "BAD="
-  for /f "delims=" %%L in ('type "%LABDIR%\%%D.ndjson" ^| findstr /r /c:"[^^&|<>]"') do set "BAD=1"
-  if defined BAD (
-    echo  ERROR: %%D.ndjson contains a character an unquoted ECHO cannot carry.
-    echo.
-    echo    The import writes each line through the shell, and one of the
-    echo    characters above would be swallowed on the way. Nothing has been
-    echo    imported.
-    echo.
-    call :fail "" "Nothing was changed."
-    exit /b 1
-  )
-)
-exit /b 0
-
-rem ------------------------------- compose down, through whichever compose we have
-:down
-if "%DC%"=="docker compose" (
-  docker compose -f "%COMPOSEFILE%" down -v --remove-orphans >nul 2>&1
-) else (
-  docker-compose -f "%COMPOSEFILE%" down -v --remove-orphans >nul 2>&1
-)
 exit /b 0
 
 rem ------------------------------------------- refuse somebody else's cluster
@@ -540,8 +443,8 @@ rem ------------------------------- write docker-compose.yml from this script
 :mkcompose
 >  "%COMPOSEFILE%" echo # Generated by setup-lab.cmd
 >  "%COMPOSEFILE%" echo # Every name and port below is derived from the folder this file
->> "%COMPOSEFILE%" echo # lives in, so the file is safe to delete and regenerate:
->> "%COMPOSEFILE%" echo #     setup-lab.cmd regen-compose
+>  "%COMPOSEFILE%" echo # lives in, so the file is safe to delete and regenerate:
+>  "%COMPOSEFILE%" echo #     setup-lab.cmd regen-compose
 >> "%COMPOSEFILE%" echo name: %SCEN%
 >> "%COMPOSEFILE%" echo services:
 >> "%COMPOSEFILE%" echo   elasticsearch:
@@ -590,7 +493,7 @@ rem ------------------------------- write docker-compose.yml from this script
   >> "%COMPOSEFILE%" echo       - I18N_LOCALE=en
   rem  Kibana will not start a detection rule at all without an encryption key
   rem  for its saved objects, and it throws one away on every restart, so the
-  rem  rules you just installed would vanish the next time the container is
+  rem  rule you just installed would vanish the next time the container is
   rem  recreated. Both keys are fixed here for that reason.
   >> "%COMPOSEFILE%" echo       - XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY=%SCEN%labencryptedsavedobjects000001
   >> "%COMPOSEFILE%" echo       - XPACK_SECURITY_ENCRYPTIONKEY=%SCEN%labsecurityencryptionkey0000001
@@ -636,49 +539,45 @@ if not "%CURLCODE%"=="200" if not "%CURLCODE%"=="201" (
 echo       account %KBUSER% ready
 exit /b 0
 
-rem ------------------------------------------ install the three detection rules
-rem  This is the whole point of the rules: without a fired rule the Alerts page
+rem ------------------------------------------ install the detection rule
+rem  This is the whole point of the rule: without a fired rule the Alerts page
 rem  renders nothing at all, so a walkthrough that opens Alerts would be a dead
-rem  end. They are installed through Kibana rather than through
+rem  end. The rule is installed through Kibana rather than through
 rem  Elasticsearch's own rule API, because Kibana is what actually runs the
 rem  alerting engine and what writes the alerts the page reads.
 rem
-rem  Idempotent by name, and deliberately so. The create route always mints a
-rem  new rule id and there is no update-by-id route, so a second run that did
-rem  not check first would install a second copy of every rule and every alert
-rem  would be counted twice. The check asks Kibana for the rules it already has
-rem  and matches the name as a fixed string: a question Kibana can answer
-rem  exactly, rather than a guess based on which index the rule writes to.
-:mkrules
-call :mkrule "!R1FILE!" "!R1NAME!" "!R1ALERTS!" 1
-if errorlevel 1 exit /b 1
-call :mkrule "!R2FILE!" "!R2NAME!" "!R2ALERTS!" 2
-if errorlevel 1 exit /b 1
-call :mkrule "!R3FILE!" "!R3NAME!" "!R3ALERTS!" 3
-if errorlevel 1 exit /b 1
-call :waitalerts
-exit /b 0
-
-rem  %1 rule file   %2 rule name   %3 expected alerts   %4 which one, for messages
+rem  It is deliberately idempotent by name. The create route always mints a new
+rem  rule id and there is no update-by-id route, so a second run would install a
+rem  second copy and every alert would be counted twice. Counting first is
+rem  cheap and needs only a single number back, which is the one thing a batch
+rem  file can parse without ceremony.
 :mkrule
-if not exist "%LABDIR%\%~1" (
-  call :fail "%~1 is missing from %LABDIR%" "The rest of the lab is fine. Put %~1 back and re-run to get the Alerts page working."
+if not exist "%LABDIR%\rule.json" (
+  call :fail "rule.json is missing from %LABDIR%" "The rest of the lab is fine. Put rule.json back and re-run to get the Alerts page working."
   exit /b 1
 )
-call :rulestored "%~2"
-if not errorlevel 1 (
-  echo       rule %~4/%NRULES% already installed, leaving it alone
-  exit /b 0
+rem  A match_phrase on the rule's name is used rather than a term on its
+rem  keyword subfield.  The keyword subfield is normalised to lower case, and
+rem  cmd.exe has no way to lower-case a string without a loop that is easy to
+rem  get wrong; an analysed text match is already case-insensitive, so the
+rem  name can be written here exactly as it is written in rule.json.
+>  "%WORK%\rulefind.json" echo {"query":{"match_phrase":{"alert.name":"!RULENAME!"}}}
+call :esdocount ".kibana_alerting_cases*" "RULEN" "%WORK%\rulefind.json"
+if errorlevel 1 exit /b 1
+if not "!RULEN!"=="0" (
+  echo       the rule is already installed, leaving it alone
+  goto :rulecheck
 )
 rem  Kibana answers /api/status a moment before it will accept a rule
 rem  creation: for a short window after start-up it refuses internal APIs and
 rem  answers "not available with the current configuration".  Waiting for the
 rem  status page is therefore not enough on its own, so the call is retried a
-rem  few times before it is called a failure.
+rem  few times before it is called a failure.  Anything else here is a real
+rem  problem and is reported on the first attempt.
 set "RULEOK="
 for /l %%i in (1,1,6) do (
   if not defined RULEOK (
-    call :docurl -s -o "%WORK%\rule-resp.json" -X POST "%KBURL%/api/detection_engine/rules" -H "kbn-xsrf: true" -H "Content-Type: application/json" %KBAUTH% --data-binary "@%LABDIR%\%~1"
+    call :docurl -s -o "%WORK%\rule-resp.json" -X POST "%KBURL%/api/detection_engine/rules" -H "kbn-xsrf: true" -H "Content-Type: application/json" %KBAUTH% --data-binary "@%LABDIR%\rule.json"
     if "!CURLCODE!"=="200" set "RULEOK=1"
     if not defined RULEOK (
       ping -n 5 127.0.0.1 >nul 2>&1
@@ -687,75 +586,33 @@ for /l %%i in (1,1,6) do (
   )
 )
 if not defined RULEOK (
-  call :fail "Kibana refused the detection rule in %~1, HTTP %CURLCODE%" "The log data is still loaded. The reason is in %WORK%\rule-resp.json and in  docker logs %SCEN%-kibana"
+  call :fail "Kibana refused the detection rule, HTTP %CURLCODE%" "The log data is still loaded. The reason is in %WORK%\rule-resp.json and in  docker logs %SCEN%-kibana"
   exit /b 1
 )
-echo       rule %~4/%NRULES% installed, waiting for it to fire
-exit /b 0
-
-rem  Does Kibana already hold a rule with exactly this name?
-rem  The name is prose with spaces and punctuation, so it is matched with
-rem  findstr as a fixed string. findstr is given a bare word rather than a
-rem  quoted JSON key on purpose: cmd.exe has no backslash escape, so
-rem  findstr /c:"\"name\":..." never matches and would report a healthy lab as
-rem  broken. A rule name contains no double quote of its own, so a plain
-rem  /c:"..." search on it is exact.
-:rulestored
-call :docurl -s -o "%WORK%\rules.json" %KBAUTH% "%KBURL%/api/detection_engine/rules/_find?per_page=200^&exclude_consumer=true"
-if not "%CURLCODE%"=="200" exit /b 1
-findstr /c:"%~1" "%WORK%\rules.json" >nul 2>&1
-if errorlevel 1 exit /b 1
-exit /b 0
-
-rem  The rules run on a one minute schedule, so the first alerts cannot exist for
-rem  up to a minute. Rather than guess, poll the index the Alerts page reads and
-rem  insist on the exact per-rule counts this lab ships. If this passes, the
-rem  page cannot be empty and cannot be showing the wrong rule, whatever
-rem  Kibana's UI decides to render.
-:waitalerts
+echo       rule installed, waiting for it to fire
+:rulecheck
+rem  The rule runs on a one minute schedule, so the first alerts cannot exist
+rem  for up to a minute. Rather than guess, poll the index the Alerts page
+rem  reads and insist on the count the walkthrough quotes. If this passes, the
+rem  page cannot be empty, whatever Kibana's UI decides to render.
 set "ALERTOK="
-set "ALERTN="
-for /l %%i in (1,1,40) do (
+for /l %%i in (1,1,30) do (
   if not defined ALERTOK (
     call :docurl -s -o "%WORK%\alerts.json" %ESAUTH% "%ESURL%/.alerts-security.alerts-default/_count?filter_path=count"
     if "!CURLCODE!"=="200" (
-      for /f "tokens=2 delims=:,{}" %%a in ('type "%WORK%\alerts.json"') do if not defined ALERTN set "ALERTN=%%a"
-      if "!ALERTN!"=="%RULEALERTTOT%" set "ALERTOK=1"
+      for /f "tokens=2 delims=:,{}" %%a in ('type "%WORK%\alerts.json"') do if not defined ALERTOK if "%%a"=="%RULEALERTS%" set "ALERTOK=1"
     )
     if not defined ALERTOK (
       ping -n 6 127.0.0.1 >nul 2>&1
-      if %%i gtr 1 if %%i lss 40 echo       still waiting for the rules, wait %%i of 40
+      if %%i gtr 1 if %%i lss 30 echo       still waiting for the rule, wait %%i of 30
     )
   )
 )
 if not defined ALERTOK (
-  call :fail "the rules are installed but have not produced %RULEALERTTOT% alerts (there are !ALERTN!)" "Nothing was deleted. Check  docker logs %SCEN%-kibana  for the rules' execution status, and remember they only match data from the last 365 days."
+  call :fail "the rule is installed but has not produced %RULEALERTS% alerts" "Nothing was deleted. Check  docker logs %SCEN%-kibana  for the rule's execution status, and remember the rule only matches data from the last 365 days."
   exit /b 1
 )
-echo       the Alerts page is live: %RULEALERTTOT% alerts in total
-rem  Now insist on each rule's own share of them. Three rules producing the
-rem  right total by accident is possible; three rules producing the right three
-rem  numbers is not.
-call :alertcount "!R1NAME!" AL1
-if errorlevel 1 exit /b 1
-call :alertcount "!R2NAME!" AL2
-if errorlevel 1 exit /b 1
-call :alertcount "!R3NAME!" AL3
-if errorlevel 1 exit /b 1
-set "BADRULES="
-if not "!AL1!"=="!R1ALERTS!" set "BADRULES=1"
-if not "!AL2!"=="!R2ALERTS!" set "BADRULES=1"
-if not "!AL3!"=="!R3ALERTS!" set "BADRULES=1"
-if defined BADRULES (
-  if not "!AL1!"=="!R1ALERTS!" echo  MISMATCH  rule 1: !R1NAME!  -- expected !R1ALERTS!, got !AL1!
-  if not "!AL2!"=="!R2ALERTS!" echo  MISMATCH  rule 2: !R2NAME!  -- expected !R2ALERTS!, got !AL2!
-  if not "!AL3!"=="!R3ALERTS!" echo  MISMATCH  rule 3: !R3NAME!  -- expected !R3ALERTS!, got !AL3!
-  call :fail "the alerts do not match the counts this lab ships" "Nothing was deleted. Run  setup-lab.cmd reset  and set the lab up again from scratch."
-  exit /b 1
-)
-echo       rule 1  !AL1! alerts   !R1NAME!
-echo       rule 2  !AL2! alerts   !R2NAME!
-echo       rule 3  !AL3! alerts   !R3NAME!
+echo       the rule has fired: %RULEALERTS% alerts are on the Alerts page
 exit /b 0
 
 rem ------------------------------------------------- install one index template
@@ -765,7 +622,7 @@ if not exist "%LABDIR%\%~1.json" (
   call :fail "the index template %~1.json is missing" "Nothing was changed."
   exit /b 1
 )
-call :docurl -s -o "%WORK%\tpl-%TPL%.json" -X PUT "%ESURL%/_index_template/%TPL%" -H "Content-Type: application/json" %ESAUTH% --data-binary "@%LABDIR%\%~1.json"
+call :docurl -s -o "%WORK%\tpl-%TPL%.json" -X PUT "%ESURL%/_index_template/%TPL%" -H "Content-Type: application/json" %ESAUTH% --data-binary "@%LABDIR%\%TPL%.json"
 if not "%CURLCODE%"=="200" if not "%CURLCODE%"=="201" (
   call :fail "the index template for %TPL% was not accepted, HTTP %CURLCODE%" "No data was imported. Fix %TPL%.json and run this file again."
   exit /b 1
@@ -821,9 +678,6 @@ rem -------------------------------------------------------- the bulk import
 :dopost
 set "NDJ=%WORK%\bulk-%DS%.ndjson"
 type nul > "%NDJ%"
-rem     for /f skips blank lines, which is what we want, and delims= means the
-rem     whole line arrives as one token with no splitting. :checkdata has
-rem     already proved that no line contains a character ECHO would swallow.
 for /f "usebackq delims=" %%L in ("%LABDIR%\!DS!.ndjson") do (
   >> "%NDJ%" echo {"index":{"_index":"!DS!-%IDXSUF%"}}
   >> "%NDJ%" echo %%L
@@ -845,19 +699,26 @@ echo       %DS%: %EXP% documents accepted by Elasticsearch
 exit /b 0
 
 rem ------------------------------ create a data view, then read the pattern back
-rem  %1 saved object id   %2 index pattern   %3 file-name-safe spelling
-rem  %3 exists because * is not a legal character in a path
 :mkdataview
 set "DVNAME=%~1"
 set "DVPAT=%~2"
+rem %~3 is a file-name-safe spelling of the pattern, because * is not a legal
+rem character in a path
 set "DVFILE=%WORK%\dv-%~3.json"
 > "%DVFILE%" echo {"attributes":{"title":"!DVPAT!","timeFieldName":"@timestamp"},"references":[]}
 call :docurl -s -o "%WORK%\dv-resp.json" -X POST "%KBURL%/api/saved_objects/index-pattern/!DVNAME!?overwrite=true" -H "kbn-xsrf: true" -H "Content-Type: application/json" %KBAUTH% --data-binary "@%DVFILE%"
 if not "%CURLCODE%"=="200" (
-  call :fail "Kibana refused to create the data view !DVPAT!, HTTP %CURLCODE%" "The log data is still loaded. Check  docker logs %SCEN%-kibana  and run this file again."
+  call :fail "Kibana refused to create the data view !DVPAT!, HTTP !CURLCODE!" "The log data is still loaded. Check  docker logs %SCEN%-kibana  and run this file again."
   exit /b 1
 )
-call :docurl -s -o "%WORK%\dv-find.json" %KBAUTH% "%KBURL%/api/saved_objects/_find?type=index-pattern^&search_fields=title^&search=!DVPAT!^&fields=title^&per_page=50"
+rem  The & separators in the URL below are written bare, with no caret, and the
+rem  URL is never parked in a variable.  CALL makes cmd.exe parse this line a
+rem  second time, and on that second pass a caret is itself doubled: ^& arrives
+rem  at curl.exe as ^^&, which is not a separator and not valid syntax inside a
+rem  query value.  A bare & typed into a quoted argument in the command text
+rem  survives both parses untouched, which is why it is correct here.  Do not
+rem  "tidy" this URL into a variable - see the same note in :esdocount.
+call :docurl -s -o "%WORK%\dv-find.json" %KBAUTH% "%KBURL%/api/saved_objects/_find?type=index-pattern&search_fields=title&search=!DVPAT!&fields=title&per_page=50"
 findstr /c:"!DVPAT!" "%WORK%\dv-find.json" >nul 2>&1
 if errorlevel 1 (
   echo  ERROR: the data view was created but the pattern "!DVPAT!" was not stored.
@@ -887,27 +748,24 @@ rem  and its backslashes kept, which silently turns this JSON into something
 rem  Elasticsearch answers with 400.  A file has no such problem, and the
 rem  quotes have to be backslash-escaped for the JSON string anyway.
 >  "%WORK%\k0.txt" echo match_all
->  "%WORK%\k1.txt" echo event.code: 4624
->  "%WORK%\k2.txt" echo event.code: 4624 and source.ip: \"%ATTACKIP%\"
->  "%WORK%\k3.txt" echo event.code: 4662
->  "%WORK%\k4.txt" echo event.code: 4662 and source.ip: \"%ATTACKIP%\"
->  "%WORK%\k5.txt" echo event.code: 4688 and user.name: \"%ENTRYUSER%\"
->  "%WORK%\k6.txt" echo network.protocol: \"smb\" and source.ip: \"%ATTACKIP%\"
-call :vqcount "auth-*"    "every document in the auth data view"    %AUTHDOCS% k0.txt
+>  "%WORK%\k1.txt" echo event.code: 4624 and event.outcome: \"success\"
+>  "%WORK%\k2.txt" echo match_all
+>  "%WORK%\k3.txt" echo dns.question.registered_domain: \"!C2DOMAIN!\"
+>  "%WORK%\k4.txt" echo dns.question.registered_domain: \"!C2DOMAIN!\" and source.ip: \"!C2IP!\"
+>  "%WORK%\k5.txt" echo event.code: 4624 and event.outcome: \"success\" and host.name: \"!C2HOST!\"
+call :vqcount "auth-*" "every document in the auth data view"     %AUTHDOCS% k0.txt
 if errorlevel 1 exit /b 1
-call :vqcount "network-*" "every document in the network data view" %NETDOCS%  k0.txt
+call :vqcount "dns-*"  "every document in the dns data view"      %DNSDOCS%  k0.txt
 if errorlevel 1 exit /b 1
-call :vqcount "auth-*"    "query 1  every successful logon that day" %D1% k1.txt
+call :vqcount "auth-*" "query 1  every successful logon"          %D1% k1.txt
 if errorlevel 1 exit /b 1
-call :vqcount "auth-*"    "query 2  the workstation's own logons"     %D2% k2.txt
+call :vqcount "dns-*"  "query 2  the dns baseline"                %D2% k2.txt
 if errorlevel 1 exit /b 1
-call :vqcount "auth-*"    "query 3  every directory access that day"  %D3% k3.txt
+call :vqcount "dns-*"  "query 3  the beacon, and the rule query"  %D3% k3.txt
 if errorlevel 1 exit /b 1
-call :vqcount "auth-*"    "query 4  the replication pull, = the alert" %D4% k4.txt
+call :vqcount "dns-*"  "query 4  the beacon from one host"        %D4% k4.txt
 if errorlevel 1 exit /b 1
-call :vqcount "auth-*"    "query 5  the encoded loader"               %D5% k5.txt
-if errorlevel 1 exit /b 1
-call :vqcount "network-*" "query 6  the smb file read"                %D6% k6.txt
+call :vqcount "auth-*" "query 5  the one logon on that host"      %D5% k5.txt
 if errorlevel 1 exit /b 1
 call :verifyviews
 if errorlevel 1 exit /b 1
@@ -922,10 +780,10 @@ rem     quotes already backslash-escaped for the JSON string they land in.
 set "VQIDX=%~1"
 set "VQLBL=%~2"
 set "VQEXP=%~3"
-set "VQF=%WORK%\vq.json"
 set "VQK=%WORK%\%~4"
 set "VQKQ="
 set /p VQKQ=<"%VQK%"
+set "VQF=%WORK%\vq.json"
 rem  The literal word match_all means "count everything in the index" and is
 rem  turned into a real match_all query.  A bare * would be turned into a
 rem  fieldless wildcard instead, which currently returns the same count but
@@ -954,16 +812,12 @@ rem     Elasticsearch, which is the same resolution Discover performs. A
 rem     pattern that matched nothing would come back 404 here, because the
 rem     data view is created with allowNoIndex switched off on purpose.
 :verifyviews
-call :vdcheck auth    "auth-*"    "winlog.event_data.ObjectType"
+call :vdcheck auth "auth-*" "event.code"
 if errorlevel 1 exit /b 1
-call :vdcheck network "network-*" "network.protocol"
+call :vdcheck dns  "dns-*"  "dns.question.name"
 if errorlevel 1 exit /b 1
 exit /b 0
 
-rem     The field checked for on auth-* is the one this investigation turns on,
-rem     so the check fails if that field ever stops being exposed to Discover -
-rem     which would leave the student unable to read the access right out of the
-rem     result column.
 :vdcheck
 call :docurl -s -o "%WORK%\vd-%~1.json" %KBAUTH% "%KBURL%/api/data_views/data_view/%SCEN%-%~1" -H "kbn-xsrf: true"
 if not "%CURLCODE%"=="200" (
@@ -1006,15 +860,6 @@ if errorlevel 1 (
 echo       data view %~2 resolves, time field @timestamp, field %~3 present
 exit /b 0
 
-rem --------------------------------------------- how many alerts one rule raised
-rem     The rule name is prose, so it is written into a JSON file with echo and
-rem     the file is posted. Kibana writes the rule name onto every alert it
-rem     raises as kibana.alert.rule.name, and that is the field this counts.
-:alertcount
-> "%WORK%\alertfind.json" echo {"query":{"term":{"kibana.alert.rule.name":"%~1"}}}
-call :esdocount ".alerts-security.alerts-default*" "%~2" "%WORK%\alertfind.json"
-exit /b 0
-
 rem ------------------------------- ES helper: document count of one dataset
 rem     the refresh is not optional.  A bulk write is not visible to a count
 rem     until the index refreshes, so without this a successful import reads
@@ -1022,17 +867,32 @@ rem     back as zero and a re-run would import the data a second time.
 rem
 rem     %~3 is an optional query body.  Without it this is a plain count of
 rem     everything in the index; with one it counts only what matches, which is
-rem     how :waitalerts asks "did this rule fire, and how often".
+rem     how :mkrule asks "is this rule already installed" without needing a
+rem     response it would then have to take apart in batch.
+rem
+rem     The _count URL below is written out literally on both CALL lines, with
+rem     bare & separators, and is deliberately NOT held in a variable.  CALL
+rem     makes cmd.exe parse its command line a second time.  On that second
+rem     pass a caret is doubled, so ^& reaches curl.exe as ^^& and
+rem     allow_no_indices arrives as the value "true^^", which Elasticsearch
+rem     rejects with HTTP 400 illegal_argument_exception: Could not convert
+rem     [allow_no_indices] to boolean.  A bare & inside a quoted argument in
+rem     the command text survives both parses, and bash has no second parse at
+rem     all, which is why setup-lab.sh sends the same URL and works.  One
+rem     query parameter would survive a variable; this URL has two, so it has
+rem     to live in the command line.
+rem
+rem     Verified against Elasticsearch 9.1:
+rem       ^^ -> HTTP 400    ^ -> HTTP 400    & literal -> HTTP 200 {"count":N}
 :esdocount
 set "EDIDX=%~1"
 set "EDVAR=%~2"
 set "EDQ=%~3"
-set "EDCNTURL=%ESURL%/%EDIDX%/_count?allow_no_indices=true^&filter_path=count"
 call :docurl -s -o nul -X POST %ESAUTH% "%ESURL%/%EDIDX%/_refresh"
 if defined EDQ (
-  call :docurl -s -o "%WORK%\cnt.json" %ESAUTH% -X POST -H "Content-Type: application/json" --data-binary "@%EDQ%" "%EDCNTURL%"
+  call :docurl -s -o "%WORK%\cnt.json" %ESAUTH% -X POST -H "Content-Type: application/json" --data-binary "@%EDQ%" "%ESURL%/%EDIDX%/_count?allow_no_indices=true&filter_path=count"
 ) else (
-  call :docurl -s -o "%WORK%\cnt.json" %ESAUTH% "%EDCNTURL%"
+  call :docurl -s -o "%WORK%\cnt.json" %ESAUTH% "%ESURL%/%EDIDX%/_count?allow_no_indices=true&filter_path=count"
 )
 if not "%CURLCODE%"=="200" (
   call :fail "could not read the document count of %EDIDX%, HTTP %CURLCODE%" "Nothing was changed."

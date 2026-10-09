@@ -27,26 +27,11 @@ set "KBPORT=5601"
 set "COMPOSEFILE=%LABDIR%\docker-compose.yml"
 
 set "ASSUME=0"
-rem  Every argument is read, not just the first, so "teardown.cmd --yes" works
-rem  whatever else the caller puts on the line, and an unrecognised word is
-rem  reported rather than quietly ignored.
-:parseargs
-if not "%~1"=="" (
-  if /i "%~1"=="--yes" set "ASSUME=1"
-  if /i "%~1"=="-y"    set "ASSUME=1"
-  if /i "%~1"=="-?"    goto :usage
-  if /i "%~1"=="--help" goto :usage
-  if /i "%~1"=="help"  goto :usage
-  if /i not "%~1"=="--yes" if /i not "%~1"=="-y" (
-    echo.
-    echo  Unknown option: %~1
-    echo  Run  teardown.cmd -?  for the list.
-    echo.
-    exit /b 2
-  )
-  shift
-  goto :parseargs
-)
+if /i "%~1"=="--yes" set "ASSUME=1"
+if /i "%~1"=="-y"   set "ASSUME=1"
+if /i "%~1"=="-?"   goto :usage
+if /i "%~1"=="--help" goto :usage
+if /i "%~1"=="help" goto :usage
 
 echo.
 echo  ==============================================================
@@ -59,19 +44,14 @@ set "HADES=0"
 set "HADKB=0"
 set "HADVOL=0"
 set "DOCKEROK=0"
-set "DC=docker compose"
 
 where docker >nul 2>&1
 if not errorlevel 1 (
   docker version --format "{{.Server.Version}}" >nul 2>&1
   if not errorlevel 1 set "DOCKEROK=1"
 )
+
 if "%DOCKEROK%"=="1" (
-  docker compose version >nul 2>&1
-  if errorlevel 1 (
-    where docker-compose >nul 2>&1
-    if not errorlevel 1 set "DC=docker-compose"
-  )
   docker inspect "%SCEN%-elasticsearch" >nul 2>&1 && set "HADES=1"
   docker inspect "%SCEN%-kibana"         >nul 2>&1 && set "HADKB=1"
   docker volume inspect "%VOL%"          >nul 2>&1 && set "HADVOL=1"
@@ -101,18 +81,18 @@ echo  The following will be REMOVED. Nothing else will be touched.
 echo.
 if "%HADES%"=="1" echo    container   %SCEN%-elasticsearch
 if "%HADKB%"=="1"  echo    container   %SCEN%-kibana
-if "%HADVOL%"=="1"  echo    volume      %VOL%      (this holds ALL the lab data, the three detection rules included)
+if "%HADVOL%"=="1"  echo    volume      %VOL%      (this holds ALL the lab data and the detection rule)
 if exist "%COMPOSEFILE%" echo    file       %COMPOSEFILE%   (the generated compose file)
 if exist "%WORK%"        echo    folder     %WORK%         (scratch files only)
 echo.
-echo  This cannot be undone. The volume holds the imported logs and the three
-echo  detection rules, so removing it means the next setup-lab.cmd has to import
-echo  the data and install the rules again.
+echo  This cannot be undone. The volume holds the imported logs, so removing it
+echo  means the next setup-lab.cmd has to import the data again and the alerts
+echo  have to be raised again.
 echo.
 echo  Deliberately KEPT, always:
 echo    - all Docker images, so the next setup is fast and offline
 echo    - every other container, volume and image on this machine
-echo    - the files in %LABDIR%  (ndjson, templates, the three rules, the scripts, the guide)
+echo    - the files in %LABDIR%  (ndjson, templates, rule.json, the scripts, the guide)
 echo.
 echo  This script never runs "docker system prune" and never removes an image.
 echo.
@@ -136,7 +116,7 @@ if "%DOCKEROK%"=="0" (
   echo      container %SCEN%-kibana         STILL PRESENT, cannot remove it
   echo      volume    %VOL%                 STILL PRESENT, cannot remove it
   if exist "%COMPOSEFILE%" echo      file     %COMPOSEFILE%   kept, so you can still run
-  echo                     "%DC% -f docker-compose.yml down" later
+  echo                    "docker compose -f docker-compose.yml down" later
   if exist "%WORK%" rmdir /s /q "%WORK%" >nul 2>&1
   echo.
   echo  To finish, start Docker Desktop and run teardown.cmd again.
@@ -146,15 +126,10 @@ if "%DOCKEROK%"=="0" (
 )
 
 rem down -v first while the compose file is still here, because that is the
-rem clean path, and through whichever compose command this machine has.
-rem Explicit removals follow so the script still works if the folder was moved
-rem and docker-compose.yml went missing.
+rem clean path.  Explicit removals follow so the script still works if the
+rem folder was moved and docker-compose.yml went missing.
 if exist "%COMPOSEFILE%" (
-  if "%DC%"=="docker compose" (
-    docker compose -f "%COMPOSEFILE%" down -v --remove-orphans
-  ) else (
-    docker-compose -f "%COMPOSEFILE%" down -v --remove-orphans
-  )
+  docker compose -f "%COMPOSEFILE%" down -v --remove-orphans
   if errorlevel 1 (
     echo    "docker compose down" did not complete cleanly, removing the objects by name
   ) else (
@@ -201,9 +176,8 @@ if "%GADES%%GADKB%%GADVOL%"=="111" (
   echo    The "%SCEN%" lab has been removed.
   echo.
   echo    Kept on purpose: every Docker image, and every other container and
-  echo    volume on this machine. The log files, the templates and the three
-  echo    detection rules in this folder are also untouched, so nothing was
-  echo    lost from disk here.
+  echo    volume on this machine. The log files and templates in this folder
+  echo    are also untouched, so nothing was lost from disk here.
   echo.
   echo    To build the lab again from scratch :  setup-lab.cmd
   echo  ==============================================================
@@ -212,7 +186,7 @@ if "%GADES%%GADKB%%GADVOL%"=="111" (
   echo    Partly removed. Read the WARNING lines above.
   echo.
   echo    The usual cause is Docker Desktop not running, or the containers
-  echo    having been started by hand rather than through compose.
+  echo    having been started by hand rather than through docker-compose.
   echo    Start Docker Desktop and run teardown.cmd again, or remove the
   echo    named objects by hand:
   echo      docker rm -f "%SCEN%-elasticsearch" "%SCEN%-kibana"
@@ -246,7 +220,7 @@ echo    teardown.cmd -?       this list
 echo.
 echo  What it removes, and only this:
 echo    the containers  %SCEN%-elasticsearch  and  %SCEN%-kibana
-echo    the volume      %VOL%   which holds the imported log data and the rules
+echo    the volume      %VOL%   which holds the imported log data and the alerts
 echo    the generated   docker-compose.yml  in this folder
 echo    the scratch     %WORK%  folder in TEMP
 echo.
